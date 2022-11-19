@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
+import re
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pymongo import MongoClient
 from urllib.parse import quote_plus
@@ -21,11 +22,14 @@ application_settings = ApplicationProperties()
 # Instantiate a schema for the OAuth2
 oauth_scheme = OAuth2PasswordBearer(tokenUrl='user_auth/token')
 
-# Get collection using properties class function
+# Get tester application collection
+tester_account_applications_collection = application_settings.getCollection("tester_account_applications")
+
+# Get admin application collection
+admin_account_applications_collection = application_settings.getCollection("admin_account_applications")
+
+# Get created users collection, these are the users that were approved
 users_collection = application_settings.getCollection("users")
-
-
-
 
 
 
@@ -46,8 +50,6 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
             data['exp'] = datetime.utcnow() + timedelta(minutes=30)
             encoded_jwt = jwt.encode(data, application_settings.getJwtEncryptionKey(), algorithm=application_settings.JWT_ALGORITHM)
             return {'access_token': encoded_jwt,'token_type': 'bearer'}
-
-
 
 
 
@@ -73,24 +75,89 @@ async def get_user_from_token(token:str = Depends(oauth_scheme)):
 
 
 
+# Check if email is available
+@router.get('/check_email_availability/{email}')
+async def check_email_availability(email:str):
+    collection_availability = [
+        (tester_account_applications_collection.find_one({'email': email}) == None),
+        (admin_account_applications_collection.find_one({'email': email}) == None),
+        (users_collection.find_one({'email': email}) == None)
+    ]
+    for a in collection_availability:
+        if a == False:
+            return {"result" : False}
+    return {"result" : True}
 
 
-# Create an account in the database so that the user can authorize themselves
-@router.post('/sign_up')
-async def sign_up(user_data:user_auth_models.Sign_Up):
-    existingUser = users_collection.find_one({'username':user_data.username})
-    if existingUser != None:
-        return {'error':'A user with that username already exists.'}
-    else:
-        hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
-        userProfile = {
-            'username':user_data.username,
-            'password_hash':hashedPWD.decode(),
-            'display_name':user_data.display_name,
-            'priviledge_level':0
+
+# Check if username is available
+@router.get('/check_username_availability/{username}')
+async def check_username_availability(username:str):
+    collection_availability = [
+        (tester_account_applications_collection.find_one({'username': username}) == None),
+        (admin_account_applications_collection.find_one({'username': username}) == None),
+        (users_collection.find_one({'username': username}) == None)
+    ]
+    for a in collection_availability:
+        if a == False:
+            return {"result" : False}
+    return {"result" : True}
+
+
+
+# Check if password is valid
+@router.get("/confirm_password_validity/{password}")
+async def checkPasswordAvailability(password:str):
+    pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
+    if pattern.match(password) != None : return {"result" : True}
+    return {"result" : False}
+
+
+
+# Save an account application in the database
+# this application will be approved or denied causing the entire document to be copied over to the users collection
+@router.post('/account_application_tester')
+async def sign_up(user_data:user_auth_models.Tester_Application):
+    
+    # Complete all checks to create account; Meant to prevent API abuse
+    # check email availability
+    collection_availability = [
+        (tester_account_applications_collection.find_one({'email': user_data.email}) == None),
+        (admin_account_applications_collection.find_one({'email': user_data.email}) == None),
+        (users_collection.find_one({'email': user_data.email}) == None)
+    ]
+    for a in collection_availability:
+        if a == False:
+            raise HTTPException(status_code=400,detail="E-Mail already in use!")
+
+    # check username availability
+    collection_availability = [
+        (tester_account_applications_collection.find_one({'username': user_data.username}) == None),
+        (admin_account_applications_collection.find_one({'username': user_data.username}) == None),
+        (users_collection.find_one({'username': user_data.username}) == None)
+    ]
+    for a in collection_availability:
+        if a == False:
+            raise HTTPException(status_code=400,detail="Username already in use!")
+
+    # check password validity
+    pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
+    if pattern.match(user_data.password) == None: 
+        raise HTTPException(status_code=400,detail="Password is invalid!")
+
+    # Hash password and create account dict
+    hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
+    userProfile = {
+        'username':user_data.username,
+        'email':user_data.email,
+        'password_hash':hashedPWD.decode(),
+        'application_content':user_data.application_content,
+        'account_type':{
+            "priv_level" : 5,
+            "account_type" : "tester"
         }
-        admin_key = application_settings.getAdminKey()
-        if(bcrypt.checkpw(user_data.admin_key.encode(), admin_key.encode())):
-            userProfile['priviledge_level'] = 5
-        users_collection.insert_one(userProfile)
-        return users_collection.find_one({'username':user_data.username},{'_id':False})
+    }
+    # insert into database
+    tester_account_applications_collection.insert_one(userProfile)
+    return {"result" : True}
+

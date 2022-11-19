@@ -1,5 +1,6 @@
 from pymongo import MongoClient, errors
 from urllib.parse import quote_plus 
+import yaml
 
 class ApplicationProperties:
 
@@ -9,7 +10,7 @@ class ApplicationProperties:
     """
 
     # Global application settings
-    testingBuild = True
+    testingBuild = False
 
     # Database connection settings
     database = None
@@ -20,8 +21,6 @@ class ApplicationProperties:
 
 
 
-
-
     def connectToDB(self):
         """Use this function to attempt to connect to a mongoDB instance.
         To test if the connection was established succesfully, use testDBConnection() 
@@ -29,10 +28,14 @@ class ApplicationProperties:
         Returns:
             MongoClient(): A MongoDB Client connected to a database if the database connection is successfull.
         """
-        databaseUser = "mongoadmin"
-        databasePassword = r"smgfFGy2GWzU72"
-        databaseIp = "127.0.0.1"
-        databasePort = "27017"
+
+        with open("secrets.yaml", mode="r") as file:
+            secrets = yaml.safe_load(file)
+
+        databaseUser = secrets['database_username']
+        databasePassword = secrets['database_password']
+        databaseIp = secrets['database_ip']
+        databasePort = secrets['database_port']
 
         uri = ""
         # Check if the current environment is testing or production, use the according parameters to establish the connection
@@ -47,44 +50,14 @@ class ApplicationProperties:
         self.database = MongoClient(uri,serverSelectionTimeoutMS=2)
         return self.database
  
+
+
     def testDBConnection(self, database):
         try:
             database.server_info()
             return True
         except errors.ServerSelectionTimeoutError as err:
             return False
-        
-
-
-
-
-    def getJwtEncryptionKey(self):
-        """Get the encryption key for generating JWT Tokens which is stored in the database
-
-        Returns:
-            String: The encryption key
-        """
-        if(self.database == None):
-            self.connectToDB()
-        response = self.getCollection("secrets").find_one({"jwt_encryption_key":{"$exists":True}})
-        return response["jwt_encryption_key"]
-    
-
-
-
-
-    def getAdminKey(self):
-        """Get the key used to create admin accounts
-
-        Returns:
-            String: The admin creation key
-        """
-        if(self.database == None):
-            self.connectToDB()
-        response = self.getCollection("secrets").find_one({"admin_account_creation_key":{"$exists":True}})
-        return response["admin_account_creation_key"]
-
-
 
 
 

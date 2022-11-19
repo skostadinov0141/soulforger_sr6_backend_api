@@ -48,7 +48,7 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
             data = {}
             data['sub'] = user['username']
             data['exp'] = datetime.utcnow() + timedelta(minutes=30)
-            encoded_jwt = jwt.encode(data, application_settings.getJwtEncryptionKey(), algorithm=application_settings.JWT_ALGORITHM)
+            encoded_jwt = jwt.encode(data, application_settings.JWT_ENCRYPTION_KEY, algorithm=application_settings.JWT_ALGORITHM)
             return {'access_token': encoded_jwt,'token_type': 'bearer'}
 
 
@@ -58,7 +58,7 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
 async def get_user_from_token(token:str = Depends(oauth_scheme)):
     # Attempt to decode a token by using the JWT key
     try:
-        payload = jwt.decode(token, application_settings.getJwtEncryptionKey(), algorithms=[application_settings.JWT_ALGORITHM])
+        payload = jwt.decode(token, application_settings.JWT_ENCRYPTION_KEY, algorithms=[application_settings.JWT_ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
             return {'error':'The token cannot be decoded.'}

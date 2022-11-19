@@ -18,6 +18,11 @@ class ApplicationProperties:
     # authentication secrets
     JWT_ALGORITHM = 'HS256'
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 120
+    JWT_ENCRYPTION_KEY = ""
+
+    with open("secrets.yaml", mode="r") as file:
+        secrets = yaml.safe_load(file)
+        JWT_ENCRYPTION_KEY = secrets['jwt_encryption_key']
 
 
 

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import re
 
+from bson import ObjectId
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pymongo import MongoClient
@@ -36,17 +37,17 @@ users_collection = application_settings.getCollection("users")
 @router.post('/token')
 async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
     # Search the database for a user with the given username (usernames are unique identifieres within the database)
-    user = users_collection.find_one({'username':form_data.username},{'_id':False})
+    user = users_collection.find_one({'username':form_data.username})
     if not user:
-        return {'error':'User not found.'}
+        return HTTPException(status_code=404, detail="No such user.")
     else:
         # Compare the saved hash and the recieved password
         if not bcrypt.checkpw(form_data.password.encode(),user['password_hash'].encode()):
-            return {'error':'Incorrect password.'}
+            raise HTTPException(status_code=400, detail="Password is incorrect.")
         else:
             # If the data checks out generate an Access Token
             data = {}
-            data['sub'] = user['username']
+            data['sub'] = str(str(user['_id']))
             data['exp'] = datetime.utcnow() + timedelta(minutes=30)
             encoded_jwt = jwt.encode(data, application_settings.JWT_ENCRYPTION_KEY, algorithm=application_settings.JWT_ALGORITHM)
             return {'access_token': encoded_jwt,'token_type': 'bearer'}
@@ -59,18 +60,19 @@ async def get_user_from_token(token:str = Depends(oauth_scheme)):
     # Attempt to decode a token by using the JWT key
     try:
         payload = jwt.decode(token, application_settings.JWT_ENCRYPTION_KEY, algorithms=[application_settings.JWT_ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            return {'error':'The token cannot be decoded.'}
+        oid: str = payload.get("sub")
+        prv_level: int = payload.get('priv_level')
+        if oid is None:
+            return HTTPException(status_code=404, detail="No such user.")
     # React if the decoding failed
     except jwt.DecodeError:
-        return {'error':'Could not validate credentials.'}
-    user = users_collection.find_one({'username':username},{'_id':False})
+        return HTTPException(status_code=400, detail="Token is invalid.")
+    user = users_collection.find_one({'_id':ObjectId(oid)})
     if user is None:
-        return {'error': 'No user associated with that token.'}
+        return HTTPException(status_code=404, detail="No such user account.")
     return {
         'username':user['username'],
-        'priviledge_level' : user['priviledge_level']
+        'priv_level' : user['account_type']['priv_level']
     }
 
 
@@ -107,7 +109,7 @@ async def check_username_availability(username:str):
 
 # Check if password is valid
 @router.get("/confirm_password_validity/{password}")
-async def checkPasswordAvailability(password:str):
+async def check_password_availability(password:str):
     pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
     if pattern.match(password) != None : return {"result" : True}
     return {"result" : False}
@@ -117,7 +119,7 @@ async def checkPasswordAvailability(password:str):
 # Save an account application in the database
 # this application will be approved or denied causing the entire document to be copied over to the users collection
 @router.post('/account_application_tester')
-async def sign_up(user_data:user_auth_models.Tester_Application):
+async def apply_as_tester(user_data:user_auth_models.TesterAdminApplication):
     
     # Complete all checks to create account; Meant to prevent API abuse
     # check email availability
@@ -161,3 +163,90 @@ async def sign_up(user_data:user_auth_models.Tester_Application):
     tester_account_applications_collection.insert_one(userProfile)
     return {"result" : True}
 
+
+
+# Save an account application in the database
+# this application will be approved or denied causing the entire document to be copied over to the users collection
+@router.post('/account_application_admin')
+async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
+    
+    # Complete all checks to create account; Meant to prevent API abuse
+    # check email availability
+    collection_availability = [
+        (tester_account_applications_collection.find_one({'email': user_data.email}) == None),
+        (admin_account_applications_collection.find_one({'email': user_data.email}) == None),
+        (users_collection.find_one({'email': user_data.email}) == None)
+    ]
+    for a in collection_availability:
+        if a == False:
+            raise HTTPException(status_code=400,detail="E-Mail already in use!")
+
+    # check username availability
+    collection_availability = [
+        (tester_account_applications_collection.find_one({'username': user_data.username}) == None),
+        (admin_account_applications_collection.find_one({'username': user_data.username}) == None),
+        (users_collection.find_one({'username': user_data.username}) == None)
+    ]
+    for a in collection_availability:
+        if a == False:
+            raise HTTPException(status_code=400,detail="Username already in use!")
+
+    # check password validity
+    pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
+    if pattern.match(user_data.password) == None: 
+        raise HTTPException(status_code=400,detail="Password is invalid!")
+
+    # Hash password and create account dict
+    hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
+    userProfile = {
+        'username':user_data.username,
+        'email':user_data.email,
+        'password_hash':hashedPWD.decode(),
+        'application_content':user_data.application_content,
+        'account_type':{
+            "priv_level" : 6,
+            "account_type" : "admin"
+        }
+    }
+    # insert into database
+    admin_account_applications_collection.insert_one(userProfile)
+    return {"result" : True}
+
+
+
+@router.patch('/update_account_status')
+async def update_account_status(account:user_auth_models.AccountApprovalForm, user:dict = Depends(get_user_from_token)):
+    if user['priv_level'] <= 5: 
+        raise HTTPException(status_code=403,detail="You have to authorize as an admin.")
+    user_doc = admin_account_applications_collection.find_one({'_id':ObjectId(account.id)})
+    if user_doc == None:
+        user_doc = tester_account_applications_collection.find_one({'_id':ObjectId(account.id)})
+    if user_doc ==  None:
+        raise HTTPException(status_code=404, detail='No such user found in any of the application databases.')
+    if account.approved == False:
+        # TODO: Make sure to send an email to the user, informing them about the account denial.
+        possible_application_collections = [
+            admin_account_applications_collection,
+            tester_account_applications_collection
+        ]
+        # loop through all collections and delete file when found
+        for col in possible_application_collections:
+            if col.find_one({'_id':user_doc['_id']}) != None:
+                col.delete_one({'_id':user_doc['_id']})
+        return {'result':True}
+    # TODO: Make sure to send an email to the user, informing them about the account denial.
+    possible_application_collections = [
+        admin_account_applications_collection,
+        tester_account_applications_collection
+    ]
+    # loop through all collections and delete doc when found
+    for col in possible_application_collections:
+        if col.find_one({'_id':user_doc['_id']}) != None:
+            col.delete_one({'_id':user_doc['_id']})
+    users_collection.insert_one({
+        "username":user_doc['username'],
+        "email":user_doc['email'],
+        "password_hash":user_doc['password_hash'],
+        "account_type":user_doc['account_type'],
+    })
+    return {'result':True}

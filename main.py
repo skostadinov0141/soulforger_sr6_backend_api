@@ -8,7 +8,7 @@ from routers import user_auth
 tags_metadata = [
     {
         'name':"user_auth",
-        'description':'Contains all endpoints related to user authentification. This includes an endpoint for creating an account, an endpoint for logging in (using JWT tokens) and finally an endpoint for verifiying the JWT token if the API recieves a request that requires authentification.'
+        'description':'Endpoints for creating accounts, generating JWT tokens and priv management.'
     },
 ]
 

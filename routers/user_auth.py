@@ -49,6 +49,7 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
             data = {}
             data['sub'] = str(str(user['_id']))
             data['exp'] = datetime.utcnow() + timedelta(minutes=30)
+            data['priv_level'] = user['account_type']['priv_level']
             encoded_jwt = jwt.encode(data, application_settings.JWT_ENCRYPTION_KEY, algorithm=application_settings.JWT_ALGORITHM)
             return {'access_token': encoded_jwt,'token_type': 'bearer'}
 

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import re
 
 from bson import ObjectId
+import bson
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pymongo import MongoClient
@@ -48,7 +49,7 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
             # If the data checks out generate an Access Token
             data = {}
             data['sub'] = str(str(user['_id']))
-            data['exp'] = datetime.utcnow() + timedelta(minutes=30)
+            data['exp'] = datetime.utcnow() + timedelta(seconds=10)
             data['priv_level'] = user['account_type']['priv_level']
             encoded_jwt = jwt.encode(data, application_settings.JWT_ENCRYPTION_KEY, algorithm=application_settings.JWT_ALGORITHM)
             return {'access_token': encoded_jwt,'token_type': 'bearer'}
@@ -58,19 +59,29 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
 # Aquire user by decoding a token
 @router.get('/get_user_via_token')
 async def get_user_from_token(token:str = Depends(oauth_scheme)):
+    
     # Attempt to decode a token by using the JWT key
     try:
         payload = jwt.decode(token, application_settings.JWT_ENCRYPTION_KEY, algorithms=[application_settings.JWT_ALGORITHM])
-        oid: str = payload.get("sub")
-        prv_level: int = payload.get('priv_level')
-        if oid is None:
-            return HTTPException(status_code=404, detail="No such user.")
+        # Attempt to generate ObjectId
+        try:
+            oid: ObjectId = ObjectId(payload.get("sub"))
+        except bson.errors.InvalidId:
+            raise HTTPException(status_code=400, detail="Invalid user ID.")
+    
     # React if the decoding failed
     except jwt.DecodeError:
-        return HTTPException(status_code=400, detail="Token is invalid.")
-    user = users_collection.find_one({'_id':ObjectId(oid)})
+        raise HTTPException(status_code=400, detail="Token is invalid.")
+    
+    # React if the token has expired
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=403, detail="Token has expired.")
+    
+    # Get user document from DB
+    user = users_collection.find_one({'_id':oid})
+    # react if user does not exist
     if user is None:
-        return HTTPException(status_code=404, detail="No such user account.")
+        raise HTTPException(status_code=404, detail="No such user account.")
     return {
         'username':user['username'],
         'priv_level' : user['account_type']['priv_level']
@@ -217,25 +228,38 @@ async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
 
 @router.patch('/update_account_status')
 async def update_account_status(account:user_auth_models.AccountApprovalForm, user:dict = Depends(get_user_from_token)):
+    
     if user['priv_level'] <= 5: 
         raise HTTPException(status_code=403,detail="You have to authorize as an admin.")
-    user_doc = admin_account_applications_collection.find_one({'_id':ObjectId(account.id)})
+    # Attempt to create an instance of ObjectID
+    try:
+        oid = ObjectId(account.id)
+    # react if ID is not validly formatted
+    except bson.errors.InvalidId:
+        raise HTTPException(status_code=400, detail='User ID is incorrect.')
+    
+    # Attempt to get user from all user collections
+    user_doc = admin_account_applications_collection.find_one({'_id':oid})
     if user_doc == None:
-        user_doc = tester_account_applications_collection.find_one({'_id':ObjectId(account.id)})
+        user_doc = tester_account_applications_collection.find_one({'_id':oid})
     if user_doc ==  None:
+        # React if user not forund in any user collection
         raise HTTPException(status_code=404, detail='No such user found in any of the application databases.')
+    # Act on denial
     if account.approved == False:
         # TODO: Make sure to send an email to the user, informing them about the account denial.
         possible_application_collections = [
             admin_account_applications_collection,
             tester_account_applications_collection
         ]
-        # loop through all collections and delete file when found
+        # loop through all collections and delete doc when found
         for col in possible_application_collections:
             if col.find_one({'_id':user_doc['_id']}) != None:
                 col.delete_one({'_id':user_doc['_id']})
         return {'result':True}
-    # TODO: Make sure to send an email to the user, informing them about the account denial.
+    
+    # Act on approvement
+    # TODO: Make sure to send an email to the user, informing them about the account approval.
     possible_application_collections = [
         admin_account_applications_collection,
         tester_account_applications_collection

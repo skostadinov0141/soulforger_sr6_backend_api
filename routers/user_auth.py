@@ -11,6 +11,7 @@ import jwt
 import bcrypt
 from application_properties import ApplicationProperties
 from models import user_auth_models
+from urllib.parse import unquote
 
 # Create a router instance
 router = APIRouter(
@@ -112,6 +113,7 @@ async def check_username_availability(username:str):
         'detail': []
     }
     if username == '': raise HTTPException(status_code=400, detail='Username missing.')
+    username = unquote(username)
     collection_availability = [
         (tester_account_applications_collection.find_one({'username': username}) == None),
         (admin_account_applications_collection.find_one({'username': username}) == None),
@@ -127,8 +129,8 @@ async def check_username_availability(username:str):
     if len(username) > 20 : 
         res['detail'].append('Der Benutzername ist zu lang. (max. 20)')
         res['result'] = False
-    pattern = re.compile('^[a-zA-Z0-9._-]')
-    if pattern.match(username): 
+    pattern = re.compile("^[a-zA-Z0-9._-]")
+    if pattern.match(username) is not None: 
         res['detail'].append('Der Benutzername darf nur a-z, A-Z, 0-9, \".\", \"_\" und \"-\" beinhalten.')
         res['result'] = False
     return res

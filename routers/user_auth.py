@@ -25,13 +25,13 @@ application_settings = ApplicationProperties()
 oauth_scheme = OAuth2PasswordBearer(tokenUrl='user_auth/token')
 
 # Get tester application collection
-tester_account_applications_collection = application_settings.getCollection("tester_account_applications")
+tester_account_applications_collection = application_settings.getCollection('tester_account_applications')
 
 # Get admin application collection
-admin_account_applications_collection = application_settings.getCollection("admin_account_applications")
+admin_account_applications_collection = application_settings.getCollection('admin_account_applications')
 
 # Get created users collection, these are the users that were approved
-users_collection = application_settings.getCollection("users")
+users_collection = application_settings.getCollection('users')
 
 
 
@@ -40,16 +40,16 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
     # Search the database for a user with the given username (usernames are unique identifieres within the database)
     user = users_collection.find_one({'username':form_data.username})
     if not user:
-        return HTTPException(status_code=404, detail="No such user.")
+        return HTTPException(status_code=404, detail='No such user.')
     else:
         # Compare the saved hash and the recieved password
         if not bcrypt.checkpw(form_data.password.encode(),user['password_hash'].encode()):
-            raise HTTPException(status_code=400, detail="Password is incorrect.")
+            raise HTTPException(status_code=400, detail='Password is incorrect.')
         else:
             # If the data checks out generate an Access Token
             data = {}
             data['sub'] = str(str(user['_id']))
-            data['exp'] = datetime.utcnow() + timedelta(seconds=10)
+            data['exp'] = datetime.utcnow() + timedelta(hours=2)
             data['priv_level'] = user['account_type']['priv_level']
             encoded_jwt = jwt.encode(data, application_settings.JWT_ENCRYPTION_KEY, algorithm=application_settings.JWT_ALGORITHM)
             return {'access_token': encoded_jwt,'token_type': 'bearer'}
@@ -65,23 +65,23 @@ async def get_user_from_token(token:str = Depends(oauth_scheme)):
         payload = jwt.decode(token, application_settings.JWT_ENCRYPTION_KEY, algorithms=[application_settings.JWT_ALGORITHM])
         # Attempt to generate ObjectId
         try:
-            oid: ObjectId = ObjectId(payload.get("sub"))
+            oid: ObjectId = ObjectId(payload.get('sub'))
         except bson.errors.InvalidId:
-            raise HTTPException(status_code=400, detail="Invalid user ID.")
+            raise HTTPException(status_code=400, detail='Invalid user ID.')
     
     # React if the decoding failed
     except jwt.DecodeError:
-        raise HTTPException(status_code=400, detail="Token is invalid.")
+        raise HTTPException(status_code=400, detail='Token is invalid.')
     
     # React if the token has expired
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=403, detail="Token has expired.")
+        raise HTTPException(status_code=403, detail='Token has expired.')
     
     # Get user document from DB
     user = users_collection.find_one({'_id':oid})
     # react if user does not exist
     if user is None:
-        raise HTTPException(status_code=404, detail="No such user account.")
+        raise HTTPException(status_code=404, detail='No such user account.')
     return {
         'username':user['username'],
         'priv_level' : user['account_type']['priv_level']
@@ -99,14 +99,19 @@ async def check_email_availability(email:str):
     ]
     for a in collection_availability:
         if a == False:
-            return {"result" : False}
-    return {"result" : True}
+            return {'result' : False}
+    return {'result' : True}
 
 
 
 # Check if username is available
 @router.get('/check_username_availability/{username}')
 async def check_username_availability(username:str):
+    res = {
+        'result': True,
+        'detail': []
+    }
+    if username == '': raise HTTPException(status_code=400, detail='Username missing.')
     collection_availability = [
         (tester_account_applications_collection.find_one({'username': username}) == None),
         (admin_account_applications_collection.find_one({'username': username}) == None),
@@ -114,17 +119,28 @@ async def check_username_availability(username:str):
     ]
     for a in collection_availability:
         if a == False:
-            return {"result" : False}
-    return {"result" : True}
+            res['detail'].append('Benutzername schon vergeben.')
+            res['result'] = False
+    if len(username) < 8 : 
+        res['detail'].append('Der Benutzername ist zu kurz. (min. 8)')
+        res['result'] = False
+    if len(username) > 20 : 
+        res['detail'].append('Der Benutzername ist zu lang. (max. 20)')
+        res['result'] = False
+    pattern = re.compile('^[a-zA-Z0-9._-]')
+    if pattern.match(username): 
+        res['detail'].append('Der Benutzername darf nur a-z, A-Z, 0-9, \".\", \"_\" und \"-\" beinhalten.')
+        res['result'] = False
+    return res
 
 
 
 # Check if password is valid
-@router.get("/confirm_password_validity/{password}")
+@router.get('/confirm_password_validity/{password}')
 async def check_password_availability(password:str):
-    pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
-    if pattern.match(password) != None : return {"result" : True}
-    return {"result" : False}
+    pattern = re.compile('(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})')
+    if pattern.match(password) != None : return {'result' : True}
+    return {'result' : False}
 
 
 
@@ -142,7 +158,7 @@ async def apply_as_tester(user_data:user_auth_models.TesterAdminApplication):
     ]
     for a in collection_availability:
         if a == False:
-            raise HTTPException(status_code=400,detail="E-Mail already in use!")
+            raise HTTPException(status_code=400,detail='E-Mail already in use!')
 
     # check username availability
     collection_availability = [
@@ -152,12 +168,12 @@ async def apply_as_tester(user_data:user_auth_models.TesterAdminApplication):
     ]
     for a in collection_availability:
         if a == False:
-            raise HTTPException(status_code=400,detail="Username already in use!")
+            raise HTTPException(status_code=400,detail='Username already in use!')
 
     # check password validity
-    pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
+    pattern = re.compile('(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})')
     if pattern.match(user_data.password) == None: 
-        raise HTTPException(status_code=400,detail="Password is invalid!")
+        raise HTTPException(status_code=400,detail='Password is invalid!')
 
     # Hash password and create account dict
     hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
@@ -167,13 +183,13 @@ async def apply_as_tester(user_data:user_auth_models.TesterAdminApplication):
         'password_hash':hashedPWD.decode(),
         'application_content':user_data.application_content,
         'account_type':{
-            "priv_level" : 5,
-            "account_type" : "tester"
+            'priv_level' : 5,
+            'account_type' : 'tester'
         }
     }
     # insert into database
     tester_account_applications_collection.insert_one(userProfile)
-    return {"result" : True}
+    return {'result' : True}
 
 
 
@@ -191,7 +207,7 @@ async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
     ]
     for a in collection_availability:
         if a == False:
-            raise HTTPException(status_code=400,detail="E-Mail already in use!")
+            raise HTTPException(status_code=400,detail='E-Mail already in use!')
 
     # check username availability
     collection_availability = [
@@ -201,12 +217,12 @@ async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
     ]
     for a in collection_availability:
         if a == False:
-            raise HTTPException(status_code=400,detail="Username already in use!")
+            raise HTTPException(status_code=400,detail='Username already in use!')
 
     # check password validity
-    pattern = re.compile("(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})")
+    pattern = re.compile('(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})')
     if pattern.match(user_data.password) == None: 
-        raise HTTPException(status_code=400,detail="Password is invalid!")
+        raise HTTPException(status_code=400,detail='Password is invalid!')
 
     # Hash password and create account dict
     hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
@@ -216,13 +232,13 @@ async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
         'password_hash':hashedPWD.decode(),
         'application_content':user_data.application_content,
         'account_type':{
-            "priv_level" : 6,
-            "account_type" : "admin"
+            'priv_level' : 6,
+            'account_type' : 'admin'
         }
     }
     # insert into database
     admin_account_applications_collection.insert_one(userProfile)
-    return {"result" : True}
+    return {'result' : True}
 
 
 
@@ -230,7 +246,7 @@ async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
 async def update_account_status(account:user_auth_models.AccountApprovalForm, user:dict = Depends(get_user_from_token)):
     
     if user['priv_level'] <= 5: 
-        raise HTTPException(status_code=403,detail="You have to authorize as an admin.")
+        raise HTTPException(status_code=403,detail='You have to authorize as an admin.')
     # Attempt to create an instance of ObjectID
     try:
         oid = ObjectId(account.id)
@@ -269,9 +285,9 @@ async def update_account_status(account:user_auth_models.AccountApprovalForm, us
         if col.find_one({'_id':user_doc['_id']}) != None:
             col.delete_one({'_id':user_doc['_id']})
     users_collection.insert_one({
-        "username":user_doc['username'],
-        "email":user_doc['email'],
-        "password_hash":user_doc['password_hash'],
-        "account_type":user_doc['account_type'],
+        'username':user_doc['username'],
+        'email':user_doc['email'],
+        'password_hash':user_doc['password_hash'],
+        'account_type':user_doc['account_type'],
     })
     return {'result':True}

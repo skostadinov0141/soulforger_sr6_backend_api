@@ -129,8 +129,8 @@ async def check_username_availability(username:str):
     if len(username) > 20 : 
         res['detail'].append('Der Benutzername ist zu lang. (max. 20)')
         res['result'] = False
-    pattern = re.compile("^[a-zA-Z0-9._-]")
-    if pattern.match(username) is not None: 
+    pattern = re.compile('[^a-zA-Z0-9\._-]')
+    if pattern.search(username): 
         res['detail'].append('Der Benutzername darf nur a-z, A-Z, 0-9, \".\", \"_\" und \"-\" beinhalten.')
         res['result'] = False
     return res

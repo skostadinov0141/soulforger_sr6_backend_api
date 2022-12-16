@@ -40,8 +40,9 @@ users_collection = application_settings.getCollection('users')
 async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
     # Search the database for a user with the given username (usernames are unique identifieres within the database)
     user = users_collection.find_one({'username':form_data.username})
-    if not user:
-        return HTTPException(status_code=404, detail='No such user.')
+    print(user)
+    if user is None:
+        raise HTTPException(status_code=404, detail='No such user.')
     else:
         # Compare the saved hash and the recieved password
         if not bcrypt.checkpw(form_data.password.encode(),user['password_hash'].encode()):
@@ -49,7 +50,7 @@ async def login_for_token(form_data:OAuth2PasswordRequestForm = Depends()):
         else:
             # If the data checks out generate an Access Token
             data = {}
-            data['sub'] = str(str(user['_id']))
+            data['sub'] = str(user['_id'])
             data['exp'] = datetime.utcnow() + timedelta(hours=2)
             data['priv_level'] = user['account_type']['priv_level']
             encoded_jwt = jwt.encode(data, application_settings.JWT_ENCRYPTION_KEY, algorithm=application_settings.JWT_ALGORITHM)
@@ -93,6 +94,11 @@ async def get_user_from_token(token:str = Depends(oauth_scheme)):
 # Check if email is available
 @router.get('/check_email_availability/{email}')
 async def check_email_availability(email:str):
+    if email == '': raise HTTPException(status_code=400, detail='E-Mail missing.')
+    res = {
+        'result':True,
+        'details':[]
+    }
     collection_availability = [
         (tester_account_applications_collection.find_one({'email': email}) == None),
         (admin_account_applications_collection.find_one({'email': email}) == None),
@@ -100,20 +106,24 @@ async def check_email_availability(email:str):
     ]
     for a in collection_availability:
         if a == False:
-            return {'result' : False}
-    return {'result' : True}
+            res['result'] = False
+            res['details'].append(0)
+    regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+    if re.search(regex, email) is None:
+        res['result'] = False
+        res['details'].append(1)
+    return res
 
 
 
 # Check if username is available
 @router.get('/check_username_availability/{username}')
 async def check_username_availability(username:str):
+    if username == '': raise HTTPException(status_code=400, detail='Username missing.')
     res = {
         'result': True,
-        'detail': []
+        'details': []
     }
-    if username == '': raise HTTPException(status_code=400, detail='Username missing.')
-    username = unquote(username)
     collection_availability = [
         (tester_account_applications_collection.find_one({'username': username}) == None),
         (admin_account_applications_collection.find_one({'username': username}) == None),
@@ -121,17 +131,16 @@ async def check_username_availability(username:str):
     ]
     for a in collection_availability:
         if a == False:
-            res['detail'].append('Benutzername schon vergeben.')
+            res['details'].append(0)
             res['result'] = False
     if len(username) < 8 : 
-        res['detail'].append('Der Benutzername ist zu kurz. (min. 8)')
+        res['details'].append(1)
         res['result'] = False
     if len(username) > 20 : 
-        res['detail'].append('Der Benutzername ist zu lang. (max. 20)')
+        res['details'].append(2)
         res['result'] = False
-    pattern = re.compile("^[a-zA-Z0-9._-]")
-    if pattern.match(username) is not None: 
-        res['detail'].append('Der Benutzername darf nur a-z, A-Z, 0-9, \".\", \"_\" und \"-\" beinhalten.')
+    if re.search(r'[^A-Za-z0-9\._-]', username) is not None: 
+        res['details'].append(3)
         res['result'] = False
     return res
 
@@ -140,9 +149,39 @@ async def check_username_availability(username:str):
 # Check if password is valid
 @router.get('/confirm_password_validity/{password}')
 async def check_password_availability(password:str):
-    pattern = re.compile('(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})')
-    if pattern.match(password) != None : return {'result' : True}
-    return {'result' : False}
+    if password == '': raise HTTPException(status_code=400, detail='Password missing.')
+    # Initialize the result dictionary with default values
+    res = {
+        'result': True,   # Assume the password is valid unless we find otherwise
+        'details': []     # Initialize an empty list of failure details
+    }
+
+    # Define a dictionary of regular expressions for different password requirements
+    # and the error messages to use if the password doesn't meet those requirements
+    expressions = {
+        r'(?=.*[a-z])': 0,
+        r'(?=.*[A-Z])': 1,
+        r'(?=.*[0-9])': 2,
+        r'(?=.*[^A-Za-z0-9])': 3,
+    }
+
+    # Iterate over the regular expressions and check the password against each one
+    for k, v in expressions.items():
+        # If the password doesn't match the regular expression,
+        # add the corresponding error message to the result details
+        if re.match(k, password) is None:
+            res['result'] = False
+            res['details'].append(v)
+
+    # If the password is less than 10 characters long, add an error message
+    # to the result details
+    if len(password) < 10:
+        res['result'] = False
+        res['details'].append(4)
+
+    # Return the result dictionary
+    return res
+
 
 
 
@@ -150,33 +189,6 @@ async def check_password_availability(password:str):
 # this application will be approved or denied causing the entire document to be copied over to the users collection
 @router.post('/account_application_tester')
 async def apply_as_tester(user_data:user_auth_models.TesterAdminApplication):
-    
-    # Complete all checks to create account; Meant to prevent API abuse
-    # check email availability
-    collection_availability = [
-        (tester_account_applications_collection.find_one({'email': user_data.email}) == None),
-        (admin_account_applications_collection.find_one({'email': user_data.email}) == None),
-        (users_collection.find_one({'email': user_data.email}) == None)
-    ]
-    for a in collection_availability:
-        if a == False:
-            raise HTTPException(status_code=400,detail='E-Mail already in use!')
-
-    # check username availability
-    collection_availability = [
-        (tester_account_applications_collection.find_one({'username': user_data.username}) == None),
-        (admin_account_applications_collection.find_one({'username': user_data.username}) == None),
-        (users_collection.find_one({'username': user_data.username}) == None)
-    ]
-    for a in collection_availability:
-        if a == False:
-            raise HTTPException(status_code=400,detail='Username already in use!')
-
-    # check password validity
-    pattern = re.compile('(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})')
-    if pattern.match(user_data.password) == None: 
-        raise HTTPException(status_code=400,detail='Password is invalid!')
-
     # Hash password and create account dict
     hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
     userProfile = {
@@ -199,33 +211,6 @@ async def apply_as_tester(user_data:user_auth_models.TesterAdminApplication):
 # this application will be approved or denied causing the entire document to be copied over to the users collection
 @router.post('/account_application_admin')
 async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
-    
-    # Complete all checks to create account; Meant to prevent API abuse
-    # check email availability
-    collection_availability = [
-        (tester_account_applications_collection.find_one({'email': user_data.email}) == None),
-        (admin_account_applications_collection.find_one({'email': user_data.email}) == None),
-        (users_collection.find_one({'email': user_data.email}) == None)
-    ]
-    for a in collection_availability:
-        if a == False:
-            raise HTTPException(status_code=400,detail='E-Mail already in use!')
-
-    # check username availability
-    collection_availability = [
-        (tester_account_applications_collection.find_one({'username': user_data.username}) == None),
-        (admin_account_applications_collection.find_one({'username': user_data.username}) == None),
-        (users_collection.find_one({'username': user_data.username}) == None)
-    ]
-    for a in collection_availability:
-        if a == False:
-            raise HTTPException(status_code=400,detail='Username already in use!')
-
-    # check password validity
-    pattern = re.compile('(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9])(?=.{8,})')
-    if pattern.match(user_data.password) == None: 
-        raise HTTPException(status_code=400,detail='Password is invalid!')
-
     # Hash password and create account dict
     hashedPWD = bcrypt.hashpw(user_data.password.encode(), bcrypt.gensalt(rounds=14))
     userProfile = {
@@ -246,7 +231,6 @@ async def apply_as_admin(user_data:user_auth_models.TesterAdminApplication):
 
 @router.patch('/update_account_status')
 async def update_account_status(account:user_auth_models.AccountApprovalForm, user:dict = Depends(get_user_from_token)):
-    
     if user['priv_level'] <= 5: 
         raise HTTPException(status_code=403,detail='You have to authorize as an admin.')
     # Attempt to create an instance of ObjectID

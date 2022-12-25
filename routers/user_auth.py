@@ -131,16 +131,16 @@ async def check_username_availability(username:str):
     ]
     for a in collection_availability:
         if a == False:
-            res['details'].append(0)
+            res['details'].append(0) #Username in use
             res['result'] = False
     if len(username) < 8 : 
-        res['details'].append(1)
+        res['details'].append(1) #Username too short min. 8
         res['result'] = False
     if len(username) > 20 : 
-        res['details'].append(2)
+        res['details'].append(2) #Username too long max. 20
         res['result'] = False
     if re.search(r'[^A-Za-z0-9\._-]', username) is not None: 
-        res['details'].append(3)
+        res['details'].append(3) #Username contains invalid characters
         res['result'] = False
     return res
 
@@ -152,19 +152,17 @@ async def check_password_availability(password:str):
     if password == '': raise HTTPException(status_code=400, detail='Password missing.')
     # Initialize the result dictionary with default values
     res = {
-        'result': True,   # Assume the password is valid unless we find otherwise
-        'details': []     # Initialize an empty list of failure details
+        'result': True,
+        'details': []
     }
-
     # Define a dictionary of regular expressions for different password requirements
     # and the error messages to use if the password doesn't meet those requirements
     expressions = {
-        r'(?=.*[a-z])': 0,
-        r'(?=.*[A-Z])': 1,
-        r'(?=.*[0-9])': 2,
-        r'(?=.*[^A-Za-z0-9])': 3,
+        r'(?=.*[a-z])': 0,        # contains lowercase letter
+        r'(?=.*[A-Z])': 1,        # contains uppercase letter
+        r'(?=.*[0-9])': 2,        # contains number
+        r'(?=.*[^A-Za-z0-9])': 3, # contains special character
     }
-
     # Iterate over the regular expressions and check the password against each one
     for k, v in expressions.items():
         # If the password doesn't match the regular expression,
@@ -172,13 +170,10 @@ async def check_password_availability(password:str):
         if re.match(k, password) is None:
             res['result'] = False
             res['details'].append(v)
-
     # If the password is less than 10 characters long, add an error message
-    # to the result details
     if len(password) < 10:
         res['result'] = False
-        res['details'].append(4)
-
+        res['details'].append(4) # password too short
     # Return the result dictionary
     return res
 
